@@ -73,15 +73,18 @@ int main(int argc, char *argv[])
 		if(header.type == 1){// If message type is JOIN
 			printf("Received JOIN from %s - %s\n", inet_ntoa(tempClient.sin_addr), buffer + 4);
 			for(int i = 0; i < MAXCLIENT; i++){
-				if(echoClntAddr[i].sin_addr.s_addr == 0 && echoClntAddr[i].sin_addr.s_addr == 0){//if theres space in the list
+				if(echoClntAddr[i].sin_addr.s_addr == 0 && echoClntAddr[i].sin_port == 0){//if theres space in the list
 					echoClntAddr[i] = tempClient;
 					memcpy(nicknames[i], buffer + 4, header.length);
 					nicknames[i][header.length] = '\0';
+					break;
 				} 
 				else if(echoClntAddr[i].sin_addr.s_addr == tempClient.sin_addr.s_addr &&
 					echoClntAddr[i].sin_family == tempClient.sin_family &&
 					echoClntAddr[i].sin_port == tempClient.sin_port){//If address already in list
-						nicknames[i][header.length] = '\0'; //Change nickname I guess
+					memcpy(nicknames[i], buffer + 4, header.length);
+					nicknames[i][header.length] = '\0'; //Change nickname I guess
+					break;
 				}
 			}
 		}
@@ -94,15 +97,26 @@ int main(int argc, char *argv[])
 						sender = i;
 					}
 			}if(sender == -1) continue; // Sender not found? Next loop
+			printf("Received CHAT from %s\n", nicknames[sender]);
 
 			char message[MAX_NICKNAME_LEN + header.length];
 			sprintf("[%s]: %s\n", nicknames[sender], buffer+4);
-			printf("Handling message from client %s\n", inet_ntoa(tempClient.sin_addr));
 
 			/* Send received message to every client */
 			for(int i = 0; i < MAXCLIENT; i++){
 				if (sendto(sock, message, MAX_NICKNAME_LEN + header.length, 0, (struct sockaddr *) &echoClntAddr[i], sizeof(echoClntAddr[i])) != recvMsgSize)
 					DieWithError("sendto() sent a different number of bytes than expected");
+			}
+		}
+		else{// Message type = LEAVE
+			for(int i = 0; i < MAXCLIENT; i++){//To find sender
+				if(echoClntAddr[i].sin_addr.s_addr == tempClient.sin_addr.s_addr &&
+					echoClntAddr[i].sin_family == tempClient.sin_family &&
+					echoClntAddr[i].sin_port == tempClient.sin_port){
+						printf("Received CHAT from %s\n", nicknames[i]);
+						memset(&echoClntAddr[i], 0, sizeof(struct sockaddr_in));
+						memset(&nicknames[i], 0, sizeof(nicknames[i]));
+				}
 			}
 		}
 	}	

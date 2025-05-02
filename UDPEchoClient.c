@@ -4,38 +4,77 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 
-#define ECHOMAX 255 /*Longest string to echo*/
+#define ECHOMAX 255   /* Longest string to echo */
+#define MAX_NICKNAME_LEN 32 // arbitrarily chosen max name length
+
+struct MessageHeader{
+	uint16_t type;
+    uint16_t length;
+};
+
 
 void DieWithError(char *errorMessage);
+
+void* receive(void *sock){
+	int socked = *((int *)sock); 
+
+	for(;;){//Loop forever
+		char buffer[ECHOMAX];
+		struct sockaddr_in fromAddr;
+		socklen_t fromLen = sizeof(fromAddr);
+		int respStringlen;
+		if((respStringlen = recvfrom(socked, buffer, ECHOMAX, 0, (struct sockaddr *) &fromAddr, &fromLen)) < 0){
+			DieWithError("Message wasn't received properly");
+		}
+		buffer[respStringlen] = '\0';
+
+		if(strcmp(buffer, "GOODBYE") == 0){
+			printf("[Server]: GOODBYE\n");
+			break;
+		}else
+			printf("%s\n", buffer);
+	}
+}
 
 int main(int argc, char *argv[])
 {
 	int sock; /*Socket descriptor*/
 	struct sockaddr_in echoServAddr; /* Echo server address */
-	struct sockaddr_in fromAddr; /* Source address of echo */
 	unsigned short echoServPort;
-	unsigned int fromSize;
 	char *servIP;
-	char *echoString;
-	char echoBuffer[ECHOMAX+1];
+	char nickName[MAX_NICKNAME_LEN];
 	unsigned int echoStringLen;
-	int respStringLen;
 
-	if ((argc<3)||(argc>4))
+	if ((argc<2)||(argc>3))
 	{
-			fprintf(stderr, "Usage: %s <Server IP> <Echo Word> [<Echo Port>]\n"), argv[0];
+			printf("Usage: ./objectname <Server IP> [<Echo Port>]\n");
 			exit(1);
 	}
 
 	servIP = argv[1];
-	echoString = argv[2];
-	
-	if ((echoStringLen = strlen(echoString)) > ECHOMAX) /* Check input length */
-		DieWithError("Echo word too long");
 
-	if(argc == 4)
-		echoServPort = atoi(argv[3]);
+	//Creating join message
+	do{
+		printf("Choose a nickname(max %d characters): ", MAX_NICKNAME_LEN);
+		fgets(nickName, sizeof(nickName), stdin);
+
+		nickName[strcspn(nickName, "\n")] = '\0';
+    	echoStringLen = strlen(nickName);
+	}while(echoStringLen == 0 || echoStringLen > MAX_NICKNAME_LEN); /* Check input length */
+
+	struct MessageHeader header;
+	header.type = htons(1);  // JOIN
+	header.length = htons(strlen(nickName));
+	
+	char message[4 + MAX_NICKNAME_LEN]; // 4 for header, 256 for nickname
+	memcpy(message, &header, 4);
+	memcpy(message + 4, nickName, strlen(nickName));
+
+	//Port stuff
+	if(argc == 3)
+		echoServPort = atoi(argv[2]);
 	else
 		echoServPort = 7;
 
@@ -49,26 +88,43 @@ int main(int argc, char *argv[])
 	echoServAddr.sin_addr.s_addr = inet_addr(servIP);   /* Server IP address */
 	echoServAddr.sin_port = htons(echoServPort);  /* Server port */
 
-	
-	/*send the string to the server*/
-	if (sendto(sock, echoString, echoStringLen, 0, (struct sockaddr *)&echoServAddr, sizeof(echoServAddr))!=echoStringLen)
+	//Making pthread
+	pthread_t receiver;
+	pthread_create(&receiver, NULL, receive, (void*)&sock);
+
+
+	/*send the JOIN message to the server*/
+	if (sendto(sock, message, echoStringLen + 4, 0, (struct sockaddr *)&echoServAddr, sizeof(echoServAddr)) != echoStringLen + 4)
 		DieWithError("send() sent a different number of bytes than expected");
 
-	/*Receive a response*/
-	fromSize = sizeof(fromAddr);
-	if ((respStringLen = recvfrom(sock, echoBuffer, ECHOMAX, 0, (struct sockaddr *) &fromAddr, &fromSize)) != echoStringLen)
-		DieWithError("recvfrom() failed") ;
-	
-	if (echoServAddr.sin_addr.s_addr != fromAddr.sin_addr.s_addr)
-	{
-		fprintf(stderr,"Error: received a packet from unknown source.\n");
-		exit(1);
+	printf("\tType \"/quit\" to leave at anytime\n");
+	for(;;){//For loop to keep sending messages
+		char buffer[ECHOMAX];
+		struct MessageHeader newHeader;
+		memset(buffer, 0, sizeof(buffer));
+		fgets(buffer, ECHOMAX, stdin);
+		buffer[strcspn(buffer, "\n")] = '\0';
+		char newMessage[4 + strlen(buffer)]; // 4 for header, rest for message
+		if(strncmp(buffer, "/quit", 5) == 0){
+			newHeader.type = htons(3);//Leave type
+			newHeader.length = htons(0);
+			memcpy(newMessage, &newHeader, 4);
+			memcpy(newMessage + 4, buffer, strlen(buffer));
+		}else{
+			newHeader.type = htons(2);//Chat type
+			newHeader.length = htons(strlen(buffer));
+			memcpy(newMessage, &newHeader, 4);
+			memcpy(newMessage + 4, buffer, strlen(buffer));
+		}if (sendto(sock, newMessage, strlen(buffer) + 4, 0,(struct sockaddr *)&echoServAddr,
+		 sizeof(echoServAddr)) != strlen(buffer) + 4)
+			DieWithError("send() sent a different number of bytes than expected");
+		if(strncmp(buffer, "/quit", 5) == 0){
+			sleep(1);
+			break;
+		}
+		
 	}
-	
-	
-	/* null-terminate the received data */
-	echoBuffer[respStringLen] = '\0' ;
-	printf("Received: %s\n", echoBuffer); /* Print the echoed arg */
+
 	close(sock);
 	exit(0);
 }
